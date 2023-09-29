@@ -6,6 +6,7 @@ import torch.nn.functional as F
 
 from .mlp import MLP
 from .normalization_layers import AdaIN
+from .resample import resample
 from .skip_connections import skip_connection
 from .spectral_convolution import SpectralConv
 from ..utils import validate_scaling_factor
@@ -22,8 +23,6 @@ class FNOBlocks(nn.Module):
         n_modes,
         output_scaling_factor: Optional[Union[Number, List[Number]]] = None,
         n_layers=1,
-        incremental_n_modes=None,
-        fno_block_precision="full",
         use_mlp=False,
         mlp_dropout=0,
         mlp_expansion=0.5,
@@ -34,15 +33,7 @@ class FNOBlocks(nn.Module):
         preactivation=False,
         fno_skip="linear",
         mlp_skip="soft-gating",
-        separable=False,
-        factorization=None,
-        rank=1.0,
         SpectralConv=SpectralConv,
-        joint_factorization=False,
-        fixed_rank_modes=False,
-        implementation="factorized",
-        decomposition_kwargs=dict(),
-        fft_norm="forward",
         **kwargs,
     ):
         super().__init__()
@@ -55,26 +46,19 @@ class FNOBlocks(nn.Module):
             None, List[List[float]]
         ] = validate_scaling_factor(output_scaling_factor, self.n_dim, n_layers)
 
-        self._incremental_n_modes = incremental_n_modes
-        self.fno_block_precision = fno_block_precision
         self.in_channels = in_channels
         self.out_channels = out_channels
         self.n_layers = n_layers
-        self.joint_factorization = joint_factorization
+
         self.non_linearity = non_linearity
         self.stabilizer = stabilizer
-        self.rank = rank
-        self.factorization = factorization
-        self.fixed_rank_modes = fixed_rank_modes
-        self.decomposition_kwargs = decomposition_kwargs
+
         self.fno_skip = fno_skip
         self.mlp_skip = mlp_skip
         self.use_mlp = use_mlp
         self.mlp_expansion = mlp_expansion
         self.mlp_dropout = mlp_dropout
-        self.fft_norm = fft_norm
-        self.implementation = implementation
-        self.separable = separable
+        
         self.preactivation = preactivation
         self.ada_in_features = ada_in_features
 
@@ -82,15 +66,6 @@ class FNOBlocks(nn.Module):
             self.in_channels,
             self.out_channels,
             self.n_modes,
-            output_scaling_factor=output_scaling_factor,
-            incremental_n_modes=incremental_n_modes,
-            rank=rank,
-            fixed_rank_modes=fixed_rank_modes,
-            implementation=implementation,
-            separable=separable,
-            factorization=factorization,
-            decomposition_kwargs=decomposition_kwargs,
-            joint_factorization=joint_factorization,
             n_layers=n_layers,
         )
 
@@ -196,11 +171,11 @@ class FNOBlocks(nn.Module):
 
     def forward_with_postactivation(self, x, index=0, output_shape=None):
         x_skip_fno = self.fno_skips[index](x)
-        x_skip_fno = self.convs[index].transform(x_skip_fno, output_shape=output_shape)
+        x_skip_fno = self.resample(x_skip_fno, index, output_shape)
 
         if self.mlp is not None:
             x_skip_mlp = self.mlp_skips[index](x)
-            x_skip_mlp = self.convs[index].transform(x_skip_mlp, output_shape=output_shape)
+            x_skip_mlp = self.resample(x_skip_mlp, index, output_shape)
 
         if self.stabilizer == "tanh":
             x = torch.tanh(x)
@@ -235,11 +210,11 @@ class FNOBlocks(nn.Module):
             x = self.norm[self.n_norms * index](x)
 
         x_skip_fno = self.fno_skips[index](x)
-        x_skip_fno = self.convs[index].transform(x_skip_fno, output_shape=output_shape)
+        x_skip_fno = self.resample(x_skip_fno, index, output_shape)
 
         if self.mlp is not None:
             x_skip_mlp = self.mlp_skips[index](x)
-            x_skip_mlp = self.convs[index].transform(x_skip_mlp, output_shape=output_shape)
+            x_skip_mlp = self.resample(x_skip_mlp, index, output_shape)
 
         if self.stabilizer == "tanh":
             x = torch.tanh(x)
@@ -257,6 +232,23 @@ class FNOBlocks(nn.Module):
             x = self.mlp[index](x) + x_skip_mlp
 
         return x
+
+    def resample(self, x, index, output_shape=None):
+        """Resamples input if scaling factors are available for this block."""
+        if self.output_scaling_factor is None and output_shape is None:
+            return x
+
+        if output_shape is not None:
+            return resample(x, res_scale=1, axis=None, output_shape=output_shape)
+
+        # output_shape is None and self.output_scaling_factor is not None
+        scaling_factor = self.output_scaling_factor[index]
+        return resample(
+            x,
+            scaling_factor,
+            list(range(-len(scaling_factor), 0)),
+            output_shape=output_shape,
+        )
 
     @property
     def incremental_n_modes(self):

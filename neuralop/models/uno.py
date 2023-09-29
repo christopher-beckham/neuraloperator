@@ -1,16 +1,17 @@
 import torch.nn as nn
 import torch.nn.functional as F
+from functools import partialmethod
 import torch
 from ..layers.mlp import MLP
 from ..layers.spectral_convolution import SpectralConv
 from ..layers.skip_connections import skip_connection
 from ..layers.padding import DomainPadding
-from ..layers.fno_block import FNOBlocks
-from ..layers.resample import resample
+from ..layers.fno_block import FNOBlocks, resample
 
+from functools import partial
 
 class UNO(nn.Module):
-    """U-Shaped Neural Operator [1]_
+    """U-Shaped Neural Operator
 
     Parameters
     ----------
@@ -85,8 +86,6 @@ class UNO(nn.Module):
         How to perform domain padding, by default 'one-sided'
     fft_norm : str, optional
         by default 'forward'
-
-    [1] : U-NO: U-shaped Neural Operators, Md Ashiqur Rahman, Zachary E Ross, Kamyar Azizzadenesheli, TMLR 2022
     """
 
     def __init__(
@@ -101,7 +100,7 @@ class UNO(nn.Module):
         uno_n_modes=None,
         uno_scalings=None,
         horizontal_skips_map=None,
-        incremental_n_modes=None,
+        #incremental_n_modes=None,
         use_mlp=False,
         mlp_dropout=0,
         mlp_expansion=0.5,
@@ -112,21 +111,27 @@ class UNO(nn.Module):
         horizontal_skip="linear",
         mlp_skip="soft-gating",
         separable=False,
-        factorization=None,
-        rank=1.0,
-        joint_factorization=False,
-        fixed_rank_modes=False,
+
         integral_operator=SpectralConv,
+        integral_operator_kwargs=dict(
+            implementation="factorized",
+            decomposition_kwargs=dict(),
+            fft_norm="forward",
+            factorization=None,
+            rank=1.0,
+            joint_factorization=False,
+            fixed_rank_modes=False,
+        ),
+        
         operator_block=FNOBlocks,
-        implementation="factorized",
-        decomposition_kwargs=dict(),
+        
         domain_padding=None,
         domain_padding_mode="one-sided",
-        fft_norm="forward",
         normalizer=None,
         verbose=False,
         **kwargs
     ):
+        
         super().__init__()
         self.n_layers = n_layers
         assert uno_out_channels is not None, "uno_out_channels can not be None"
@@ -152,19 +157,19 @@ class UNO(nn.Module):
         self.in_channels = in_channels
         self.out_channels = out_channels
         self.horizontal_skips_map = horizontal_skips_map
-        self.joint_factorization = joint_factorization
+        #self.joint_factorization = joint_factorization
         self.non_linearity = non_linearity
-        self.rank = rank
-        self.factorization = factorization
-        self.fixed_rank_modes = fixed_rank_modes
-        self.decomposition_kwargs = decomposition_kwargs
+        #self.rank = rank
+        #self.factorization = factorization
+        #self.fixed_rank_modes = fixed_rank_modes
+        #self.decomposition_kwargs = decomposition_kwargs
         self.fno_skip = (fno_skip,)
         self.mlp_skip = (mlp_skip,)
-        self.fft_norm = fft_norm
-        self.implementation = implementation
+        #self.fft_norm = fft_norm
+        #self.implementation = implementation
         self.separable = separable
         self.preactivation = preactivation
-        self._incremental_n_modes = incremental_n_modes
+        #self._incremental_n_modes = incremental_n_modes
         self.operator_block = operator_block
         self.integral_operator = integral_operator
 
@@ -182,11 +187,11 @@ class UNO(nn.Module):
         # To get the final (end to end) scaling factors we need to multiply
         # the scaling factors (a list) of all layer.
 
-        self.end_to_end_scaling_factor = [1] * len(self.uno_scalings[0])
+        self.end_to_end_scaling_factor = [1] * self.n_dim
         # multiplying scaling factors
         for k in self.uno_scalings:
             self.end_to_end_scaling_factor = [
-                i * j for (i, j) in zip(self.end_to_end_scaling_factor, k)
+                i * k for i in self.end_to_end_scaling_factor
             ]
 
         # list with a single element is replaced by the scaler.
@@ -221,6 +226,11 @@ class UNO(nn.Module):
         self.fno_blocks = nn.ModuleList([])
         self.horizontal_skips = torch.nn.ModuleDict({})
         prev_out = self.hidden_channels
+        
+        integral_operator_partial = partial(
+            self.integral_operator,
+            **integral_operator_kwargs
+        )
 
         for i in range(self.n_layers):
             if i in self.horizontal_skips_map.keys():
@@ -233,26 +243,34 @@ class UNO(nn.Module):
                     in_channels=prev_out,
                     out_channels=self.uno_out_channels[i],
                     n_modes=self.uno_n_modes[i],
+                    output_scaling_factor=[self.uno_scalings[i]],
+                    ###
                     use_mlp=use_mlp,
                     mlp_dropout=mlp_dropout,
                     mlp_expansion=mlp_expansion,
-                    output_scaling_factor=[self.uno_scalings[i]],
                     non_linearity=non_linearity,
                     norm=norm,
                     preactivation=preactivation,
                     fno_skip=fno_skip,
                     mlp_skip=mlp_skip,
-                    incremental_n_modes=incremental_n_modes,
-                    rank=rank,
-                    SpectralConv=self.integral_operator,
-                    fft_norm=fft_norm,
-                    fixed_rank_modes=fixed_rank_modes,
-                    implementation=implementation,
-                    separable=separable,
-                    factorization=factorization,
-                    decomposition_kwargs=decomposition_kwargs,
-                    joint_factorization=joint_factorization,
-                    normalizer=normalizer,
+
+
+                    SpectralConv=integral_operator_partial,
+
+                    
+                    #incremental_n_modes=incremental_n_modes,    # spectralconv
+                    #rank=rank,                                  # spectralconv
+                    #SpectralConv=self.integral_operator,
+                    #fft_norm=fft_norm,                          # spectralconv
+                    #fixed_rank_modes=fixed_rank_modes,          # spectralconv
+                    #implementation=implementation,              # spectralconv
+                    #separable=separable,                        # spectralconv
+                    #factorization=factorization,                # spectralconv
+                    #decomposition_kwargs=decomposition_kwargs,  # spectralconv
+                    #joint_factorization=joint_factorization,    # spectralconv
+                    #normalizer=normalizer,
+                    ###
+                    #**kwargs
                 )
             )
 
@@ -275,7 +293,7 @@ class UNO(nn.Module):
             non_linearity=non_linearity,
         )
 
-    def forward(self, x, **kwargs):
+    def forward(self, x):
         x = self.lifting(x)
 
         if self.domain_padding is not None:

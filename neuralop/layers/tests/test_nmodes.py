@@ -17,6 +17,7 @@ def test_fnoblock_nmodes():
     print("Run block1:")
     block1(xfake)
 
+
     print("----")
 
     block2 = FNOBlocks(
