@@ -1,16 +1,17 @@
 import torch.nn as nn
 import torch.nn.functional as F
+from functools import partialmethod
 import torch
 from ..layers.mlp import MLP
 from ..layers.spectral_convolution import SpectralConv
 from ..layers.skip_connections import skip_connection
 from ..layers.padding import DomainPadding
 from ..layers.fno_block import FNOBlocks
-from ..layers.resample import resample
+from neuralop.layers.resample import resample
 
 
 class UNO(nn.Module):
-    """U-Shaped Neural Operator [1]_
+    """U-Shaped Neural Operator
 
     Parameters
     ----------
@@ -85,8 +86,6 @@ class UNO(nn.Module):
         How to perform domain padding, by default 'one-sided'
     fft_norm : str, optional
         by default 'forward'
-
-    [1] : U-NO: U-shaped Neural Operators, Md Ashiqur Rahman, Zachary E Ross, Kamyar Azizzadenesheli, TMLR 2022
     """
 
     def __init__(
@@ -182,11 +181,11 @@ class UNO(nn.Module):
         # To get the final (end to end) scaling factors we need to multiply
         # the scaling factors (a list) of all layer.
 
-        self.end_to_end_scaling_factor = [1] * len(self.uno_scalings[0])
+        self.end_to_end_scaling_factor = [1] * self.n_dim
         # multiplying scaling factors
         for k in self.uno_scalings:
             self.end_to_end_scaling_factor = [
-                i * j for (i, j) in zip(self.end_to_end_scaling_factor, k)
+                i * k for i in self.end_to_end_scaling_factor
             ]
 
         # list with a single element is replaced by the scaler.
@@ -275,7 +274,7 @@ class UNO(nn.Module):
             non_linearity=non_linearity,
         )
 
-    def forward(self, x, **kwargs):
+    def forward(self, x):
         x = self.lifting(x)
 
         if self.domain_padding is not None:
